@@ -3,7 +3,7 @@ name: 早安 & 玉山降雨概率
 on:
   schedule:
     - cron: '30 23 * * *'   # UTC 23:30 = 北京时间 07:30
-  workflow_dispatch:        # 手动测试
+  workflow_dispatch:        # 手动测试入口
 
 jobs:
   push:
@@ -20,26 +20,27 @@ jobs:
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
           CITY:              ${{ secrets.CITY }}
+          AMAP_KEY:          ${{ secrets.AMAP_KEY }}   # 值：50dffe1ac60bd6193254abca85f90836
         shell: python
         run: |
           import os, requests, datetime as dt
           from datetime import datetime
 
-          # 1. 读 Secret
+          # 1. 读取 Secret
           key  = os.getenv('WECOM_WEBHOOK_KEY')
           city = os.getenv('CITY')
+          ak   = os.getenv('AMAP_KEY')
           url  = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
 
-          # 2. 天气 API（高德云）
-          # 每天 50 次免费，key 已公开
+          # 2. 高德天气（city=361123 对应江西上饶玉山）
           weather_url = (
               'https://restapi.amap.com/v3/weather/weatherInfo'
-              '?city=361123&extensions=all&key=be6e1b4b3e1f7e8f2e9e8f2e9e8f2e9e'
+              '?city=361123&extensions=all&key=' + ak
           )
           r = requests.get(weather_url, timeout=10).json()
           if r['status'] != '1':
               raise RuntimeError('天气接口异常:' + str(r))
-          today = r['forecasts'][0]['casts'][0]          # 今天
+          today = r['forecasts'][0]['casts'][0]
           day_prob = int(today['dayweather'] in ('小雨','中雨','大雨','暴雨','雷阵雨'))*100 \
                      or int(today['nightweather'] in ('小雨','中雨','大雨','暴雨','雷阵雨'))*100
 
@@ -52,6 +53,6 @@ jobs:
           祝你今天顺利~"""
           payload = {"msgtype": "markdown", "markdown": {"content": md}}
 
-          # 4. 推群
+          # 4. 推送到企业微信
           requests.post(url, json=payload, timeout=10).raise_for_status()
           print('✅ 早安推送完成')
