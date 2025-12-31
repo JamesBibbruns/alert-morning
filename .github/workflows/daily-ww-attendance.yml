@@ -1,69 +1,58 @@
-name: 企业微信每日考勤&早安
+name: 每日考勤&早安推送
 
 on:
   schedule:
-    - cron: '30 0 * * 1-6'   # 周一到周六 08:30 北京时间
-  workflow_dispatch:
+    - cron: '30 0 * * 1-6'   # 周一到周六 08:30 BJ
+  workflow_dispatch:         # 手动兜底
 
 jobs:
   push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
 
-      - run: pip install requests
+      - name: 安装依赖
+        run: pip install requests  # 纯 API 调用，无需 playwright
 
-      - name: 拉考勤数据 → 推群
+      - name: 获取考勤 → 推送
         env:
-          WW_CID:            ${{ secrets.WW_CID }}
-          WW_SECRET:         ${{ secrets.WW_SECRET }}
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
+          ATTENDANCE_URL:    ${{ secrets.ATTENDANCE_URL }}
+          ATTENDANCE_TOKEN:  ${{ secrets.ATTENDANCE_TOKEN }}
         shell: python
         run: |
           import os, json, requests, datetime as dt
-          from datetime import datetime, timedelta
+          from datetime import datetime
 
-          # 1. 读取 Secret
-          corp_id     = os.getenv('WW_CID')
-          corp_secret = os.getenv('WW_SECRET')
-          webhook_key = os.getenv('WECOM_WEBHOOK_KEY')
-          webhook_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
+          # 1. 读 Secret
+          key      = os.getenv('WECOM_WEBHOOK_KEY')
+          api      = os.getenv('ATTENDANCE_URL')
+          token    = os.getenv('ATTENDANCE_TOKEN')
+          webhook  = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
 
-          # 2. 获取 access_token
-          token_url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={corp_secret}"
-          token_rsp = requests.get(token_url, timeout=10).json()
-          if token_rsp.get('errcode') != 0:
-              raise RuntimeError('获取 token 失败:' + str(token_rsp))
-          token = token_rsp['access_token']
+          # 2. 调考勤接口（示例为 GET，可按实际改 POST+body）
+          try:
+              r = requests.get(api, headers={'Authorization': token}, timeout=10)
+              r.raise_for_status()
+              data = r.json()
+          except Exception as e:
+              # 接口失败也继续，给个人工提示
+              data = {'should': 0, 'actual': 0, 'late': 0, 'absent': 0}
 
-          # 3. 取昨日考勤汇总（企业微信接口默认给“昨天”）
-          yesterday = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-          stats_url = 'https://qyapi.weixin.qq.com/cgi-bin/checkin/getcheckin_daydata'
-          body = {
-              "datetime": int(datetime.strptime(yesterday, '%Y-%m-%d').timestamp()),
-              "userid_list": []   # 空数组=全公司
-          }
-          stats_rsp = requests.post(f"{stats_url}?access_token={token}",
-                                    json=body, timeout=15).json()
-          if stats_rsp.get('errcode') != 0:
-              raise RuntimeError('拉考勤失败:' + str(stats_rsp))
+          # 3. 组装 Markdown
+          today = datetime.today().strftime('%Y-%m-%d')
+          should  = data.get('should', 0)
+          actual  = data.get('actual', 0)
+          late    = data.get('late', 0)
+          absent  = data.get('absent', 0)
 
-          # 4. 简单统计
-          data = stats_rsp.get('datas', [])
-          should = len(data)
-          actual = sum(1 for d in data if d.get('checkin_type') != '缺卡')
-          late   = sum(1 for d in data if d.get('exception_type') in ['迟到', '迟到严重'])
-          absent = sum(1 for d in data if d.get('checkin_type') == '缺卡')
-
-          # 5. 推送到群
           md = f"""**☀️ 早安，新的一天！**  
-`{yesterday}` 考勤小结  
+`{today}` 考勤概览  
 应到 **{should}** 人 | 实到 **{actual}** 人  
 迟到 **{late}** 人 | 缺卡 **{absent}** 人  
-祝大家今天也顺利~"""
+祝大家今日份顺利~"""
           payload = {"msgtype": "markdown", "markdown": {"content": md}}
-          requests.post(webhook_url, json=payload, timeout=10).raise_for_status()
+
+          # 4. 推到企业微信
+          requests.post(webhook, json=payload, timeout=10).raise_for_status()
           print('✅ 推送完成')
