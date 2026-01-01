@@ -20,7 +20,7 @@ jobs:
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
           CITY:              ${{ secrets.CITY }}
-          AMAP_KEY:          ${{ secrets.AMAP_KEY }}   # 值：50dffe1ac60bd6193254abca85f90836
+          AMAP_KEY:          ${{ secrets.AMAP_KEY }}  
         shell: python
         run: |
           import os, requests, datetime as dt
