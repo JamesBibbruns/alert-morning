@@ -25,43 +25,46 @@ jobs:
         run: |
           import os, requests, datetime as dt
           from datetime import datetime
-
           # 1. 读取 Secret
           key  = os.getenv('WECOM_WEBHOOK_KEY')
           city = os.getenv('CITY')
           ak   = os.getenv('AMAP_KEY')
           url  = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
-
+          
           # 2. 高德天气（city=361123 对应江西上饶玉山）
           weather_url = (
-              'https://restapi.amap.com/v3/weather/weatherInfo'
+              'https://restapi.amap.com/v3/weather/weatherInfo '
               '?city=361123&extensions=all&key=' + ak
           )
           r = requests.get(weather_url, timeout=10).json()
           if r['status'] != '1':
               raise RuntimeError('天气接口异常:' + str(r))
-
+          
           today = r['forecasts'][0]['casts'][0]
+          tomorrow = r['forecasts'][0]['casts'][1]
+          
+          # 3. 获取白天、夜间的温度和天气
+          day_temp = today['daytemp']  # 白天温度
+          night_temp = today['nighttemp']  # 夜间温度
+          
+          # 4. 计算白天和夜间的降雨概率
+          day_prob = int(today['dayweather'] in ('小雨', '中雨', '大雨', '暴雨', '雷阵雨')) * 100 \
+                     or int(today['nightweather'] in ('小雨', '中雨', '大雨', '暴雨', '雷阵雨')) * 100
 
-          # 3. 降雨概率（白天/夜间分别判断）
-          rain_codes = {'小雨','中雨','大雨','暴雨','雷阵雨'}
-          day_prob   = 100 if today['dayweather']   in rain_codes else 0
-          night_prob = 100 if today['nightweather'] in rain_codes else 0
+          night_prob = int(today['nightweather'] in ('小雨', '中雨', '大雨', '暴雨', '雷阵雨')) * 100 \
+                       or int(tomorrow['dayweather'] in ('小雨', '中雨', '大雨', '暴雨', '雷阵雨')) * 100
 
-          # 4. 温度
-          day_temp   = today['daytemp']   # 白天温度区间，如 "28℃"
-          night_temp = today['nighttemp'] # 夜间温度区间，如 "22℃"
-
-          # 5. 拼装 Markdown
+          # 5. 拼装 Markdown 消息
           date_str = datetime.today().strftime('%Y-%m-%d')
           md = f"""**☀️ 早安，新的一天！**  
-`{date_str}` · {city}  
-白天：{today['dayweather']} {day_temp}  | 降雨概率 {day_prob}%  
-夜间：{today['nightweather']} {night_temp}  | 降雨概率 {night_prob}%  
-祝各位今天顺利~"""
-
-          payload = {"msgtype": "markdown", "markdown": {"content": md}}
-
+          `{date_str}` · {city}  
+          白天：{today['dayweather']} | 夜间：{today['nightweather']}  
+          白天温度：{day_temp}°C | 夜间温度：{night_temp}°C  
+          **白天降雨概率 ≈ {day_prob} %**  
+          **夜间降雨概率 ≈ {night_prob} %**  
+          祝各位今天顺利~"""
+          
           # 6. 推送到企业微信
+          payload = {"msgtype": "markdown", "markdown": {"content": md}}
           requests.post(url, json=payload, timeout=10).raise_for_status()
           print('✅ 早安推送完成')
