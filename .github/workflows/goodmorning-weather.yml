@@ -42,25 +42,22 @@ jobs:
 
           today = r['forecasts'][0]['casts'][0]
 
-          # 3. 降雨概率（白天/夜间分别判断）
-          rain_codes = {'小雨','中雨','大雨','暴雨','雷阵雨'}
-          day_prob   = 100 if today['dayweather']   in rain_codes else 0
-          night_prob = 100 if today['nightweather'] in rain_codes else 0
+          # 3. 降雨程度直接沿用天气文字，不再额外判断
+          day_w    = today['dayweather']
+          night_w  = today['nightweather']
+          day_t    = today['daytemp']
+          night_t  = today['nighttemp']
 
-          # 4. 温度
-          day_temp   = today['daytemp']   # 白天温度区间，如 "28℃"
-          night_temp = today['nighttemp'] # 夜间温度区间，如 "22℃"
-
-          # 5. 拼装 Markdown
+          # 4. 拼装 Markdown
           date_str = datetime.today().strftime('%Y-%m-%d')
           md = f"""**☀️ 早安，新的一天！**  
 `{date_str}` · {city}  
-白天：{today['dayweather']} {day_temp}  | 降雨概率 {day_prob}%  
-夜间：{today['nightweather']} {night_temp}  | 降雨概率 {night_prob}%  
+白天：{day_w} {day_t}  
+夜间：{night_w} {night_t}  
 祝各位今天顺利~"""
 
           payload = {"msgtype": "markdown", "markdown": {"content": md}}
 
-          # 6. 推送到企业微信
+          # 5. 推送到企业微信
           requests.post(url, json=payload, timeout=10).raise_for_status()
           print('✅ 早安推送完成')
