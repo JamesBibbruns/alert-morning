@@ -50,7 +50,7 @@ jobs:
           `{date_str}` · {city}  
           白天：{today['dayweather']} | 夜间：{today['nightweather']}  
           **降雨概率 ≈ {day_prob} %**  
-          祝你今天顺利~"""
+          祝各位今天顺利~"""
           payload = {"msgtype": "markdown", "markdown": {"content": md}}
 
           # 4. 推送到企业微信
