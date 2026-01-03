@@ -1,8 +1,8 @@
-name: 早安 & 玉山降雨概率
+name: 早安 & 玉山降雨概率（OpenWeather 版）
 
 on:
   schedule:
-    - cron: '10 23 * * *'   # UTC 23:30 = 北京时间 07:30
+    - cron: '10 23 * * *'   # UTC 23:10 = 北京时间 07:10
   workflow_dispatch:
 
 jobs:
@@ -19,32 +19,39 @@ jobs:
       - name: 获取天气 → 推群
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
-          CITY:              ${{ secrets.CITY }}
-          AMAP_KEY:          ${{ secrets.AMAP_KEY }}
+          CITY:              ${{ secrets.CITY }}          # 举例：玉山县 或 Yushan
+          OPENWEATHER_KEY:   ${{ secrets.OPENWEATHER_KEY }}
         shell: python
         run: |
           import os, requests, datetime, time, random
 
           # ---------- 1. 参数 ----------
           key  = os.getenv('WECOM_WEBHOOK_KEY')
-          city = os.getenv('CITY') or '361123'   # 玉山县
-          ak   = os.getenv('AMAP_KEY')
+          city = os.getenv('CITY') or 'Yushan'
+          ak   = os.getenv('OPENWEATHER_KEY')
           wx_url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
+
+          # 先通过城市名拿到地理坐标
+          geo_url = (
+              'https://api.openweathermap.org/geo/1.0/direct'
+              f'?q={city}&limit=1&appid={ak}'
+          )
+          # 天气预报接口
           weather_url = (
-              'https://restapi.amap.com/v3/weather/weatherInfo'
-              f'?city={city}&extensions=all&key={ak}'
+              'https://api.openweathermap.org/data/2.5/forecast'
+              f'?q={city}&units=metric&lang=zh_cn&appid={ak}'
           )
 
-          # ---------- 2. 重试 ----------
           sess = requests.Session()
           sess.headers.update({'User-Agent': 'github-actions/1.0'})
+
+          # ---------- 2. 重试 ----------
           for attempt in range(1, 6):
               try:
+                  # 拉取 5 天/3 小时粒度预报
                   resp = sess.get(weather_url, timeout=30).json()
-                  if resp.get('status') != '1':
+                  if 'list' not in resp:
                       raise RuntimeError(f'业务错误: {resp}')
-                  if not resp.get('forecasts'):
-                      raise RuntimeError('空 forecasts，可能配额用完或城市码无效')
                   break
               except Exception as e:
                   print(f'[attempt {attempt}] {e}')
@@ -57,18 +64,48 @@ jobs:
                   time.sleep(random.uniform(2, 5))
 
           # ---------- 3. 解析 ----------
-          today = resp['forecasts'][0]['casts'][0]
+          from collections import defaultdict
+          import itertools
+
+          today_str = datetime.date.today().isoformat()
+          # 按日期分组
+          buckets = defaultdict(list)
+          for item in resp['list']:
+              day = item['dt_txt'][:10]
+              buckets[day].append(item)
+
+          today_forecast = buckets.get(today_str, [])
+          if not today_forecast:
+              raise RuntimeError('未拿到今日预报')
+
+          # 白天 06-18 时，夜间 18-06 时
+          day_part   = [x for x in today_forecast if 6 <= int(x['dt_txt'][11:13]) < 18]
+          night_part = [x for x in today_forecast if int(x['dt_txt'][11:13]) >= 18 or int(x['dt_txt'][11:13]) < 6]
+
+          def summary(part):
+              if not part: return '暂无数据', 0, 0
+              weathers = [p['weather'][0]['description'] for p in part]
+              temps    = [p['main']['temp'] for p in part]
+              pop      = max([p.get('pop', 0) for p in part])  # 降水概率 0-1
+              return (
+                  max(set(weathers), key=weathers.count),  # 取众数
+                  round(max(pop) * 100),                 # 最大降水概率 %
+                  round(sum(temps) / len(temps))         # 平均温度
+              )
+
+          day_w, day_pop, day_temp   = summary(day_part)
+          night_w, night_pop, night_temp = summary(night_part)
+
           rain_map = {"小雨": "轻微降雨", "中雨": "中等降雨", "大雨": "较强降雨",
                       "暴雨": "暴雨", "雷阵雨": "雷阵雨", "阵雨": "阵雨"}
           def desc(w): return rain_map.get(w, "无降雨")
 
-          day_w, night_w = today['dayweather'], today['nightweather']
           md = f"""**☀️ 早安，新的一天！**  
           `{datetime.date.today()}` · {city}  
           白天：{day_w} | 夜间：{night_w}  
-          白天温度：{today['daytemp']}°C | 夜间温度：{today['nighttemp']}°C  
-          **白天降雨概率 ≈ {100 if day_w in rain_map else 0} %** - {desc(day_w)}  
-          **夜间降雨概率 ≈ {100 if night_w in rain_map else 0} %** - {desc(night_w)}  
+          白天温度：{day_temp}°C | 夜间温度：{night_temp}°C  
+          **白天降雨概率 ≈ {day_pop} %** - {desc(day_w)}  
+          **夜间降雨概率 ≈ {night_pop} %** - {desc(night_w)}  
           祝各位今天顺利~"""
 
           # ---------- 4. 推送 ----------
