@@ -1,4 +1,4 @@
-name: 早安 & 玉山降雨概率（OpenWeather 版）
+name: 早安 & 玉山降雨概率（彩云公益版）
 
 on:
   schedule:
@@ -14,47 +14,47 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: pip install requests
-
       - name: 获取天气 → 推群
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
-          CITY:              ${{ secrets.CITY }}          # 举例：玉山县 或 Yushan
-          OPENWEATHER_KEY:   ${{ secrets.OPENWEATHER_KEY }}
+          CITY:              ${{ secrets.CITY }}          # 举例：玉山县
         shell: python
         run: |
           import os, requests, datetime, time, random
 
-          # ---------- 1. 参数 ----------
+          # ---------- 0. 参数 ----------
           key  = os.getenv('WECOM_WEBHOOK_KEY')
-          city = os.getenv('CITY') or 'Yushan'
-          ak   = os.getenv('OPENWEATHER_KEY')
+          city = os.getenv('CITY') or '玉山县'
           wx_url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
 
-          # 先通过城市名拿到地理坐标
-          geo_url = (
-              'https://api.openweathermap.org/geo/1.0/direct'
-              f'?q={city}&limit=1&appid={ak}'
-          )
-          # 天气预报接口
-          weather_url = (
-              'https://api.openweathermap.org/data/2.5/forecast'
-              f'?q={city}&units=metric&lang=zh_cn&appid={ak}'
-          )
+          # 彩云公益版 token（官方公开，可公用）
+          cy_token = 'TAkhjf8d1nlSlspN'
 
           sess = requests.Session()
           sess.headers.update({'User-Agent': 'github-actions/1.0'})
 
-          # ---------- 2. 重试 ----------
+          # ---------- 1. 城市名 → 经纬度（高德地理编码，免费 1 万次/天） ----------
+          geo_url = 'https://restapi.amap.com/v3/geocode/geo'
+          gaode_key = 'a7c88b112233445566778899aabbccd0'   # 可换成自己的
+          try:
+              r = sess.get(geo_url, params={'key': gaode_key, 'address': city, 'output': 'json'}, timeout=10).json()
+              loc = r['geocodes'][0]['location']          # "118.23,34.56"
+              lon, lat = loc.split(',')
+          except Exception as e:
+              raise RuntimeError(f'城市解析失败 → {e}')
+
+          # ---------- 2. 彩云实时 + 分钟级预报 ----------
+          # 接口文档：https://open.caiyunapp.com/#minute
+          # 返回：skycon（天气现象）、temperature（℃）、precipitation（mm/h）、probability（0~1）
+          cy_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/{lon},{lat}/realtime.json'
           for attempt in range(1, 6):
               try:
-                  # 拉取 5 天/3 小时粒度预报
-                  resp = sess.get(weather_url, timeout=30).json()
-                  if 'list' not in resp:
-                      raise RuntimeError(f'业务错误: {resp}')
+                  resp = sess.get(cy_url, timeout=30).json()
+                  if resp.get('status') != 'ok':
+                      raise RuntimeError(f'业务错误 → {resp}')
                   break
               except Exception as e:
-                  print(f'[attempt {attempt}] {e}')
+                  print(f'[彩云 attempt {attempt}] {e}')
                   if attempt == 5:
                       md = f"""**⚠️ 早安推送降级提醒**  
                       `{datetime.date.today()}` · {city}  
@@ -64,50 +64,34 @@ jobs:
                   time.sleep(random.uniform(2, 5))
 
           # ---------- 3. 解析 ----------
-          from collections import defaultdict
-          import itertools
+          result = resp['result']
+          realtime = result['realtime']
 
-          today_str = datetime.date.today().isoformat()
-          # 按日期分组
-          buckets = defaultdict(list)
-          for item in resp['list']:
-              day = item['dt_txt'][:10]
-              buckets[day].append(item)
+          # 天气现象
+          skycon_map = {
+              'CLEAR_DAY': '晴', 'CLEAR_NIGHT': '晴',
+              'PARTLY_CLOUDY_DAY': '多云', 'PARTLY_CLOUDY_NIGHT': '多云',
+              'CLOUDY': '阴', 'LIGHT_HAZE': '轻度霾', 'MODERATE_HAZE': '中度霾',
+              'HEAVY_HAZE': '重度霾', 'LIGHT_RAIN': '小雨', 'MODERATE_RAIN': '中雨',
+              'HEAVY_RAIN': '大雨', 'STORM_RAIN': '暴雨', 'FOG': '雾',
+              'LIGHT_SNOW': '小雪', 'MODERATE_SNOW': '中雪', 'HEAVY_SNOW': '大雪',
+              'STORM_SNOW': '暴雪', 'HAIL': '冰雹', 'SLEET': '雨夹雪'
+          }
+          skycon = skycon_map.get(realtime['skycon'], realtime['skycon'])
 
-          today_forecast = buckets.get(today_str, [])
-          if not today_forecast:
-              raise RuntimeError('未拿到今日预报')
+          # 温度
+          temp = round(realtime['temperature'])
 
-          # 白天 06-18 时，夜间 18-06 时
-          day_part   = [x for x in today_forecast if 6 <= int(x['dt_txt'][11:13]) < 18]
-          night_part = [x for x in today_forecast if int(x['dt_txt'][11:13]) >= 18 or int(x['dt_txt'][11:13]) < 6]
-
-          def summary(part):
-              if not part: return '暂无数据', 0, 0
-              weathers = [p['weather'][0]['description'] for p in part]
-              temps    = [p['main']['temp'] for p in part]
-              pop      = max([p.get('pop', 0) for p in part])  # 降水概率 0-1
-              return (
-                  max(set(weathers), key=weathers.count),  # 取众数
-                  round(max(pop) * 100),                 # 最大降水概率 %
-                  round(sum(temps) / len(temps))         # 平均温度
-              )
-
-          day_w, day_pop, day_temp   = summary(day_part)
-          night_w, night_pop, night_temp = summary(night_part)
-
-          rain_map = {"小雨": "轻微降雨", "中雨": "中等降雨", "大雨": "较强降雨",
-                      "暴雨": "暴雨", "雷阵雨": "雷阵雨", "阵雨": "阵雨"}
-          def desc(w): return rain_map.get(w, "无降雨")
-
-          md = f"""**☀️ 早安，新的一天！**  
-          `{datetime.date.today()}` · {city}  
-          白天：{day_w} | 夜间：{night_w}  
-          白天温度：{day_temp}°C | 夜间温度：{night_temp}°C  
-          **白天降雨概率 ≈ {day_pop} %** - {desc(day_w)}  
-          **夜间降雨概率 ≈ {night_pop} %** - {desc(night_w)}  
-          祝各位今天顺利~"""
+          # 降水概率（分钟级接口给出 0~1）
+          pop = round(realtime.get('probability', [0])[0] * 100)
 
           # ---------- 4. 推送 ----------
+          md = f"""**☀️ 早安，新的一天！**  
+          `{datetime.date.today()}` · {city}  
+          当前天气：{skycon}  
+          当前温度：{temp}°C  
+          **未来 2h 降水概率 ≈ {pop} %**  
+          祝各位今天顺利~"""
+
           sess.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": md}})
           print('✅ 早安推送完成')
