@@ -2,9 +2,8 @@ name: 早安 & 玉山降雨概率
 
 on:
   schedule:
-    # UTC 23:30 = 北京时间 07:30
-    - cron: '10 23 * * *'
-  workflow_dispatch:        # 手动触发按钮
+    - cron: '10 23 * * *'   # UTC 23:30 = 北京时间 07:30
+  workflow_dispatch:
 
 jobs:
   push:
@@ -15,7 +14,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: pip install requests urllib3
+      - run: pip install requests
 
       - name: 获取天气 → 推群
         env:
@@ -28,7 +27,7 @@ jobs:
 
           # ---------- 1. 参数 ----------
           key  = os.getenv('WECOM_WEBHOOK_KEY')
-          city = os.getenv('CITY') or '361123'          # 玉山县
+          city = os.getenv('CITY') or '361123'   # 玉山县
           ak   = os.getenv('AMAP_KEY')
           wx_url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
           weather_url = (
@@ -36,24 +35,24 @@ jobs:
               f'?city={city}&extensions=all&key={ak}'
           )
 
-          # ---------- 2. 带重试的请求 ----------
+          # ---------- 2. 重试 ----------
           sess = requests.Session()
           sess.headers.update({'User-Agent': 'github-actions/1.0'})
-          for attempt in range(1, 6):               # 最多 5 次
+          for attempt in range(1, 6):
               try:
                   resp = sess.get(weather_url, timeout=30).json()
-                  if resp.get('status') == '1':
-                      break
-                  raise RuntimeError(f'业务错误: {resp}')
+                  if resp.get('status') != '1':
+                      raise RuntimeError(f'业务错误: {resp}')
+                  if not resp.get('forecasts'):
+                      raise RuntimeError('空 forecasts，可能配额用完或城市码无效')
+                  break
               except Exception as e:
                   print(f'[attempt {attempt}] {e}')
                   if attempt == 5:
-                      # 彻底失败，推送降级消息
                       md = f"""**⚠️ 早安推送降级提醒**  
                       `{datetime.date.today()}` · {city}  
-                      天气接口超时，请手动查看天气~"""
-                      payload = {"msgtype": "markdown", "markdown": {"content": md}}
-                      sess.post(wx_url, json=payload, timeout=10)
+                      天气接口异常，请手动查看天气~"""
+                      sess.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": md}})
                       exit(0)
                   time.sleep(random.uniform(2, 5))
 
@@ -61,12 +60,9 @@ jobs:
           today = resp['forecasts'][0]['casts'][0]
           rain_map = {"小雨": "轻微降雨", "中雨": "中等降雨", "大雨": "较强降雨",
                       "暴雨": "暴雨", "雷阵雨": "雷阵雨", "阵雨": "阵雨"}
+          def desc(w): return rain_map.get(w, "无降雨")
 
-          def desc(weather):
-              return rain_map.get(weather, "无降雨")
-
-          day_w   = today['dayweather']
-          night_w = today['nightweather']
+          day_w, night_w = today['dayweather'], today['nightweather']
           md = f"""**☀️ 早安，新的一天！**  
           `{datetime.date.today()}` · {city}  
           白天：{day_w} | 夜间：{night_w}  
@@ -76,6 +72,5 @@ jobs:
           祝各位今天顺利~"""
 
           # ---------- 4. 推送 ----------
-          payload = {"msgtype": "markdown", "markdown": {"content": md}}
-          sess.post(wx_url, json=payload, timeout=10)
+          sess.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": md}})
           print('✅ 早安推送完成')
