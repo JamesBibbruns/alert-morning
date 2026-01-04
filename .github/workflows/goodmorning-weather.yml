@@ -1,4 +1,4 @@
-name: 早安 & 玉山降雨概率（彩云公益版）
+name: 早安 & 玉山降雨概率（彩云公益版·无高德）
 
 on:
   schedule:
@@ -14,6 +14,8 @@ jobs:
         with:
           python-version: '3.11'
 
+      - run: pip install requests
+
       - name: 获取天气 → 推群
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
@@ -27,29 +29,32 @@ jobs:
           city = os.getenv('CITY') or '玉山县'
           wx_url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
 
-          # 彩云公益版 token（官方公开，可公用）
-          cy_token = 'TAkhjf8d1nlSlspN'
-
+          cy_token = 'TAkhjf8d1nlSlspN'          # 彩云公益版公开 token
           sess = requests.Session()
           sess.headers.update({'User-Agent': 'github-actions/1.0'})
 
-          # ---------- 1. 城市名 → 经纬度（高德地理编码，免费 1 万次/天） ----------
-          geo_url = 'https://restapi.amap.com/v3/geocode/geo'
-          gaode_key = 'a7c88b112233445566778899aabbccd0'   # 可换成自己的
-          try:
-              r = sess.get(geo_url, params={'key': gaode_key, 'address': city, 'output': 'json'}, timeout=10).json()
-              loc = r['geocodes'][0]['location']          # "118.23,34.56"
-              lon, lat = loc.split(',')
-          except Exception as e:
-              raise RuntimeError(f'城市解析失败 → {e}')
+          # ---------- 1. 城市名 → 经纬度（彩云城市搜索） ----------
+          # 接口：https://open.caiyunapp.com/#city-search
+          city_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/city/search.json'
+          for attempt in range(1, 4):
+              try:
+                  r = sess.get(city_url, params={'keyword': city}, timeout=10).json()
+                  if r.get('status') != 'ok' or not r['location']:
+                      raise RuntimeError(f'城市搜索失败 → {r}')
+                  loc = r['location'][0]          # 取第一条
+                  lon, lat = loc['lon'], loc['lat']
+                  break
+              except Exception as e:
+                  print(f'[城市搜索 attempt {attempt}] {e}')
+                  if attempt == 3:
+                      raise RuntimeError('无法解析城市名 → 经纬度')
+                  time.sleep(2)
 
-          # ---------- 2. 彩云实时 + 分钟级预报 ----------
-          # 接口文档：https://open.caiyunapp.com/#minute
-          # 返回：skycon（天气现象）、temperature（℃）、precipitation（mm/h）、probability（0~1）
-          cy_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/{lon},{lat}/realtime.json'
+          # ---------- 2. 彩云实时（含 2h 降水概率） ----------
+          realtime_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/{lon},{lat}/realtime.json'
           for attempt in range(1, 6):
               try:
-                  resp = sess.get(cy_url, timeout=30).json()
+                  resp = sess.get(realtime_url, timeout=30).json()
                   if resp.get('status') != 'ok':
                       raise RuntimeError(f'业务错误 → {resp}')
                   break
@@ -64,10 +69,7 @@ jobs:
                   time.sleep(random.uniform(2, 5))
 
           # ---------- 3. 解析 ----------
-          result = resp['result']
-          realtime = result['realtime']
-
-          # 天气现象
+          realtime = resp['result']['realtime']
           skycon_map = {
               'CLEAR_DAY': '晴', 'CLEAR_NIGHT': '晴',
               'PARTLY_CLOUDY_DAY': '多云', 'PARTLY_CLOUDY_NIGHT': '多云',
@@ -78,11 +80,7 @@ jobs:
               'STORM_SNOW': '暴雪', 'HAIL': '冰雹', 'SLEET': '雨夹雪'
           }
           skycon = skycon_map.get(realtime['skycon'], realtime['skycon'])
-
-          # 温度
           temp = round(realtime['temperature'])
-
-          # 降水概率（分钟级接口给出 0~1）
           pop = round(realtime.get('probability', [0])[0] * 100)
 
           # ---------- 4. 推送 ----------
