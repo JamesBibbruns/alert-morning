@@ -1,8 +1,8 @@
-name: 早安 & 玉山降雨概率（彩云公益版·无高德）
+name: 早安 & 玉山降雨概率（彩云公益版·兜底版）
 
 on:
   schedule:
-    - cron: '10 23 * * *'   # UTC 23:10 = 北京时间 07:10
+    - cron: '10 23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -19,44 +19,43 @@ jobs:
       - name: 获取天气 → 推群
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
-          CITY:              ${{ secrets.CITY }}          # 举例：玉山县
+          CITY:              ${{ secrets.CITY }}
         shell: python
         run: |
-          import os, requests, datetime, time, random
+          import os, requests, datetime, time, random, json
 
-          # ---------- 0. 参数 ----------
           key  = os.getenv('WECOM_WEBHOOK_KEY')
           city = os.getenv('CITY') or '玉山县'
           wx_url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
-
-          cy_token = 'TAkhjf8d1nlSlspN'          # 彩云公益版公开 token
+          cy_token = 'TAkhjf8d1nlSlspN'
           sess = requests.Session()
           sess.headers.update({'User-Agent': 'github-actions/1.0'})
 
-          # ---------- 1. 城市名 → 经纬度（彩云城市搜索） ----------
-          # 接口：https://open.caiyunapp.com/#city-search
-          city_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/city/search.json'
-          for attempt in range(1, 4):
+          # ---------- 1. 城市搜索（失败就降维到固定坐标） ----------
+          def get_coord():
               try:
-                  r = sess.get(city_url, params={'keyword': city}, timeout=10).json()
-                  if r.get('status') != 'ok' or not r['location']:
-                      raise RuntimeError(f'城市搜索失败 → {r}')
-                  loc = r['location'][0]          # 取第一条
-                  lon, lat = loc['lon'], loc['lat']
-                  break
+                  r = sess.get(
+                      f'https://api.caiyunapp.com/v2.5/{cy_token}/city/search.json',
+                      params={'keyword': city},
+                      timeout=10
+                  )
+                  r.raise_for_status()
+                  loc = r.json()['location'][0]
+                  return loc['lon'], loc['lat']
               except Exception as e:
-                  print(f'[城市搜索 attempt {attempt}] {e}')
-                  if attempt == 3:
-                      raise RuntimeError('无法解析城市名 → 经纬度')
-                  time.sleep(2)
+                  print(f'城市搜索失败 → {e} ，使用内置坐标')
+                  # 玉山县县政府（GCJ-02）
+                  return 118.2587, 28.6832
 
-          # ---------- 2. 彩云实时（含 2h 降水概率） ----------
+          lon, lat = get_coord()
+
+          # ---------- 2. 彩云实时 ----------
           realtime_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/{lon},{lat}/realtime.json'
           for attempt in range(1, 6):
               try:
                   resp = sess.get(realtime_url, timeout=30).json()
                   if resp.get('status') != 'ok':
-                      raise RuntimeError(f'业务错误 → {resp}')
+                      raise RuntimeError(resp)
                   break
               except Exception as e:
                   print(f'[彩云 attempt {attempt}] {e}')
@@ -73,8 +72,7 @@ jobs:
           skycon_map = {
               'CLEAR_DAY': '晴', 'CLEAR_NIGHT': '晴',
               'PARTLY_CLOUDY_DAY': '多云', 'PARTLY_CLOUDY_NIGHT': '多云',
-              'CLOUDY': '阴', 'LIGHT_HAZE': '轻度霾', 'MODERATE_HAZE': '中度霾',
-              'HEAVY_HAZE': '重度霾', 'LIGHT_RAIN': '小雨', 'MODERATE_RAIN': '中雨',
+              'CLOUDY': '阴', 'LIGHT_RAIN': '小雨', 'MODERATE_RAIN': '中雨',
               'HEAVY_RAIN': '大雨', 'STORM_RAIN': '暴雨', 'FOG': '雾',
               'LIGHT_SNOW': '小雪', 'MODERATE_SNOW': '中雪', 'HEAVY_SNOW': '大雪',
               'STORM_SNOW': '暴雪', 'HAIL': '冰雹', 'SLEET': '雨夹雪'
