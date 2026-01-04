@@ -1,8 +1,8 @@
-name: 早安 & 玉山降雨概率（彩云公益版·兜底版）
+name: 早安 & 玉山降雨概率（彩云公益版·固定坐标）
 
 on:
   schedule:
-    - cron: '10 23 * * *'
+    - cron: '10 23 * * *'   # UTC 23:10 = 北京时间 07:10
   workflow_dispatch:
 
 jobs:
@@ -19,37 +19,23 @@ jobs:
       - name: 获取天气 → 推群
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
-          CITY:              ${{ secrets.CITY }}
+          CITY:              ${{ secrets.CITY }}          # 仅用于文案展示
         shell: python
         run: |
-          import os, requests, datetime, time, random, json
+          import os, requests, datetime, time, random
 
           key  = os.getenv('WECOM_WEBHOOK_KEY')
           city = os.getenv('CITY') or '玉山县'
           wx_url = f'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}'
+
           cy_token = 'TAkhjf8d1nlSlspN'
           sess = requests.Session()
           sess.headers.update({'User-Agent': 'github-actions/1.0'})
 
-          # ---------- 1. 城市搜索（失败就降维到固定坐标） ----------
-          def get_coord():
-              try:
-                  r = sess.get(
-                      f'https://api.caiyunapp.com/v2.5/{cy_token}/city/search.json',
-                      params={'keyword': city},
-                      timeout=10
-                  )
-                  r.raise_for_status()
-                  loc = r.json()['location'][0]
-                  return loc['lon'], loc['lat']
-              except Exception as e:
-                  print(f'城市搜索失败 → {e} ，使用内置坐标')
-                  # 玉山县县政府（GCJ-02）
-                  return 118.2587, 28.6832
+          # ---------- 1. 直接写死玉山县 GCJ-02 坐标 ----------
+          lon, lat = 118.2587, 28.6832
 
-          lon, lat = get_coord()
-
-          # ---------- 2. 彩云实时 ----------
+          # ---------- 2. 彩云实时（含 2h 降水概率） ----------
           realtime_url = f'https://api.caiyunapp.com/v2.5/{cy_token}/{lon},{lat}/realtime.json'
           for attempt in range(1, 6):
               try:
@@ -79,7 +65,7 @@ jobs:
           }
           skycon = skycon_map.get(realtime['skycon'], realtime['skycon'])
           temp = round(realtime['temperature'])
-          pop = round(realtime.get('probability', [0])[0] * 100)
+          pop  = round(realtime.get('probability', [0])[0] * 100)
 
           # ---------- 4. 推送 ----------
           md = f"""**☀️ 早安，新的一天！**  
@@ -89,5 +75,5 @@ jobs:
           **未来 2h 降水概率 ≈ {pop} %**  
           祝各位今天顺利~"""
 
-          sess.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": md}})
-          print('✅ 早安推送完成')
+          r = sess.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": md}})
+          print('✅ 早安推送完成' if r.status_code == 200 else '❌ 推送失败')
