@@ -2,7 +2,7 @@ name: 早安 & 玉山降雨概率（高德版·固定坐标）
 
 on:
   schedule:
-    - cron: '10 22 * * *'   # UTC 23:10 = 北京 07:10
+    - cron: '30 22 * * *'   # UTC 23:10 = 北京 07:10
   workflow_dispatch:
 
 jobs:
