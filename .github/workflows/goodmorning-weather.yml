@@ -25,7 +25,7 @@ jobs:
         run: |
           import os, requests, datetime, time, random
 
-          key = os.getenv('WECOM_WEBHOOK_KEY')
+          key = os.getenv('WECOM_WEBHOHOOK_KEY')
           city = os.getenv('CITY') or '玉山县'
           ak = os.getenv('GAODE_KEY')
           if not ak:
@@ -64,22 +64,24 @@ jobs:
           today_forecast = forecast_resp['forecasts'][0]['casts'][0]
           day_weather = today_forecast['dayweather']
           night_weather = today_forecast['nightweather']
-          day_pop = int(today_forecast.get('daypower', 0))
-          night_pop = int(today_forecast.get('nightpower', 0))
+          # 高德免费版API没有降水概率字段，移除相关代码
+          day_power = today_forecast.get('daypower', '')
+          night_power = today_forecast.get('nightpower', '')
 
           print(f"当前天气: {skycon}, 温度: {temp}°C")
-          print(f"今日白天: {day_weather}, 降水概率: {day_pop}%")
-          print(f"今日夜间: {night_weather}, 降水概率: {night_pop}%")
+          print(f"今日白天: {day_weather}, 风力: {day_power}")
+          print(f"今日夜间: {night_weather}, 风力: {night_power}")
 
           rain_keywords = ['雨', '阵雨', '雷阵雨', '小雨', '中雨', '大雨', '暴雨', '大暴雨', '特大暴雨', '雨雪', '冻雨']
 
           is_raining_now = any(k in skycon for k in rain_keywords)
           will_rain_day = any(k in day_weather for k in rain_keywords)
-          high_rain_prob = day_pop >= 30 or night_pop >= 30
+          will_rain_night = any(k in night_weather for k in rain_keywords)
 
-          need_umbrella = is_raining_now or will_rain_day or high_rain_prob
+          # 仅根据天气现象判断是否带伞
+          need_umbrella = is_raining_now or will_rain_day or will_rain_night
 
-          print(f"判断结果: 当前下雨={is_raining_now}, 白天有雨={will_rain_day}, 高概率={high_rain_prob}")
+          print(f"判断结果: 当前下雨={is_raining_now}, 白天有雨={will_rain_day}, 夜间有雨={will_rain_night}")
           print(f"是否需要带伞: {need_umbrella}")
 
           if not need_umbrella:
@@ -96,7 +98,7 @@ jobs:
           else:
               warning = "☂️ **今日有雨，建议出门带伞，以防万一~**"
 
-          md = f'**{warning}**\n\n📍 `{datetime.date.today()}` · {city}\n🌤️ 当前天气：{skycon}（{temp}°C）\n📅 白天预报：{day_weather}（降水概率 {day_pop}%）\n🌙 夜间预报：{night_weather}（降水概率 {night_pop}%）\n\n💡 雨天路滑，注意安全，祝出行顺利！'
+          md = f'**{warning}**\n\n📍 `{datetime.date.today()}` · {city}\n🌤️ 当前天气：{skycon}（{temp}°C）\n📅 白天预报：{day_weather}（风力 {day_power}）\n🌙 夜间预报：{night_weather}（风力 {night_power}）\n\n💡 雨天路滑，注意安全，祝出行顺利！'
 
           r = sess.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": md}})
 
